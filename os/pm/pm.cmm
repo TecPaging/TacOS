@@ -2,7 +2,7 @@
  * TacOS Source Code
  *    Tokuyama kousen Advanced educational Computer.
  *
- * Copyright (C) 2011 - 2020 by
+ * Copyright (C) 2011 - 2023 by
  *                      Dept. of Computer Science and Electronic Engineering,
  *                      Tokuyama College of Technology, JAPAN
  *
@@ -22,6 +22,7 @@
 /*
  * pm/pm.cmm : プロセスマネージャ(PM)の本体、プロセスの生成と管理を行う
  *
+ * 2023.12.29 : MMUの自動的な Page Table Walk に対応
  * 2023.02.20 : ページング方式に対応
  * 2020.09.06 : zmbProc， waitChild を kernel から移動（追加）
  * 2020.08.15 : sleep システムコールを kernel に移動（削除）
@@ -74,6 +75,10 @@
 #include "pm.hmm"
 #include "exeFile.hmm"
 
+#define MMU_TblReg   0xa6                           // ページテーブルレジスタ
+#define MMU_FltPage  0xa6                           // ページ例外の原因ページ
+#define MMU_FltAdr   0xa2                           // ページ例外の原因アドレス
+
 // PM は単一プロセスで実行されるので、ほとんどのグローバル変数アクセスで
 // 排他を気にしなくて良い
 //-----------------------------------------------------------------------------
@@ -117,7 +122,7 @@ int get2Frame() {                                   // 2連続フレームの割
 void freeFrame(int num) {                           // 指定したフレームを開放
   int r = setPri(DI|KERN);                          // 排他のため
 #ifdef DEBUG
-  printF("freeFrame(%x)\n", num);
+  printF("freeFrame(%02x)\n", num);
 #endif
   if(_readMap(bitmap, num)==1) {                    // 指定した場所が1なら
     _writeMap(bitmap, num, 0);                      // ビットマップに0を書き込み
@@ -166,16 +171,6 @@ int vToP(int vAdr, PCB pcb) {
   return ((entry&FBITS)*PAGESIZ) | adrToOffs(vAdr); // 物理アドレスを返す
 }
 
-boolean isBusyFrame(int fNum) {
-  for (int i=0x82; i<=0x9e; i=i+4) {                // 全TLBエントリについて
-    int entry = in(i);
-    if ((entry & VBIT)!=0 && (entry&FBITS)==fNum){  // V=1,エントリとfNumが同じ
-      return true;                                  // TLBで使用中
-    }
-  }
-  return false;                                     // 使用していない
-}
-
 // プロセス内で解放できるフレームを探す
 int searchFrame(PCB pcb) {
   int fNum = -1;
@@ -184,28 +179,26 @@ int searchFrame(PCB pcb) {
   for(int pNum=0; pNum<=lastPage; pNum=pNum+1) {    // Text Segの全ページにつき
     int entry = pageTable[pNum];                    //   エントリーを取り出す
     if ((entry & (VBIT|SBIT))==VBIT) {              //   V=1,S=0 のページを探す
-      if (!isBusyFrame(entry & FBITS)) {            // TLBで使用していない
-        fNum = entry & FBITS;                       //     解放できるフレーム
-        pageTable[pNum] = 0x0000;                   //     エントリをクリアし
-        break;                                      //       フレームを解放する
-      }
+      fNum = entry & FBITS;                         //     解放できるフレーム
+      pageTable[pNum] = 0x0000;                     //     エントリをクリアし
+      break;                                        //       フレームを解放する
     } 
   }
   return fNum;                                      // フレーム番号を返す
 }                                                   // 見つからなかった場合は-1
 
-// 全プロセスについて解放できるフレームを探す
+// 全ユーザプロセスについて解放できるフレームを探す
 int searchAllFrame() {
   int fNum = -1;                                    // フレーム番号
-  for(int i=0; i<PRC_MAX; i=i+1) {                  // 全てのプロセスについて
+  for(int i=0; i<PRC_MAX; i=i+1) {                  // 全ユーザプロセスについて
     PCB pcb = procTbl[i];                           // PCBを取り出し
-    if(pcb != null && pcb.pageTable != null) {      // PCBが存在すれば
+    if(pcb != null && pcb.pageTable != null) {      // PCBとpageTableが存在なら
       fNum = searchFrame(pcb);                      // 解放できるフレームを探す
       if(fNum >= 0) break;                          // フレームが見つかった
     }
   }
 #ifdef DEBUG
-  printF("searchAllFrame(fNum=%x)\n",fNum); 
+  printF("searchAllFrame(fNum=%02x)\n",fNum); 
 #endif
   return fNum;                                      // フレーム番号を返す
 }                                                   // 見つからない場合は-1
@@ -213,15 +206,13 @@ int searchAllFrame() {
 // フレームを割り当てページテーブルに記憶する
 int allocFrame(int pNum, PCB pcb) {
   int fNum = getFrame();                            // フレームを割り当て
-#ifdef DEBUG
-  printF("allocFrame(pNum=%x,fNum=%x,pid=%d)\n", pNum, fNum, pcb.pid);
-#endif
   if (fNum < 0) {                                   // 空きフレームがなかったら
     fNum = searchAllFrame();                        // 解放できるフレームを探す
   #ifdef DEBUG
-    printF("allocFrame(fNum=%x)\n",fNum);
+    printF("allocFrame(releaseFrame=%02x)\n",fNum);
   #endif
     if (fNum < 0) panic("allocFrame");              // 解放できなかった
+    tlbPid = 0;                                     // dispatch時にTLBをflush
   }
   if (pNum < adrToPage(pcb.textSiz)) {
     pcb.pageTable[pNum] = VBIT|TEXTBITS|fNum;       // V=1,RWX=101,フレーム番号
@@ -229,7 +220,7 @@ int allocFrame(int pNum, PCB pcb) {
     pcb.pageTable[pNum] = VBIT|DATABITS|fNum;       // V=1,RWX=110,フレーム番号
   }
 #ifdef DEBUG
-  printF("allocFrame(pageTable[%x]=%x)\n", pNum, pcb.pageTable[pNum]);
+  printF("allocFrame(pageTable[%02x]=%04x)\n", pNum, pcb.pageTable[pNum]);
 #endif
   return fNum;                                      // フレーム番号を返す
 }
@@ -245,7 +236,7 @@ void clearFrame(int fNum) {
 // 該当ページをexeファイルから読み込む
 void swapIn(int pNum, int fNum, PCB pcb) {
 #ifdef DEBUG
-  printF("swapIn(pNum=%x,fNum=%x,pid=%d)\n", pNum, fNum, pcb.pid);
+  printF("swapIn(pNum=%02x,fNum=%02x,pid=%d)\n", pNum, fNum, pcb.pid);
 #endif
   int fd = pcb.filedsc;                             // exeファイルのfd
   int r = seek(fd, 0, HDRSIZ+pNum*PAGESIZ);         // ページ位置にseek
@@ -572,11 +563,11 @@ int pmSysCall(int op, int prm1, int prm2, int prm3, PCB pcb) {
 }
 
 // プロセスマネージャサーバのメインルーチン
-interrupt tlbMiss();                                // TLBミス例外ハンドラ
+interrupt pageFlt();                                // ページ例外ハンドラ
 
 public void pmMain() {
   int[] VECTOR = _ItoA(0xffe0);
-  VECTOR[10] = addrof(tlbMiss);                     // TLBmiss ハンドラ登録
+  VECTOR[10] = addrof(pageFlt);                     // Page Fault ハンドラ登録
   pmLink = newLink();                               // リンクを生成する
   while (true) {                                    // システムコールを待つ
     Link l = receive(pmLink);                       // システムコールを受信
@@ -766,56 +757,19 @@ public int _wait(int[] sta) {                       // ユーザプロセス用�
 }
 
 //-----------------------------------------------------------------------------
-// TLBミスはユーザプロセスが自ら処理する（ユーザプロセスのコンテキストで実行）
+// ページ例外はユーザプロセスが処理する（ユーザプロセスのコンテキストで実行）
 // ！！ただし，swap-inが必要な場合はPMに切り換わるので要注意！！
 //-----------------------------------------------------------------------------
-int emptyTlb() {                                    // 空きTLBエントリを探す
-  for (int i=0x82; i<=0x9e; i=i+4) {                // 全TLBエントリについて
-    if ((in(i) & VBIT)==0) return i-2;              //   V=0のものを探す
-  }
-  return -1;
-}
-
-int quietTlb() {                                    // 低使用率TLBエントリを探す
-  for (int i=0x82; i<=0x9e; i=i+4) {                // 全TLBエントリについて
-    if ((in(i) & (VBIT|RBIT))==VBIT) return i-2;    //   V=1 && R=0 を探す
-  }
-  return -1;
-}
-
-interrupt tlbMiss() {                               // TLBミス例外ハンドラ
+interrupt pageFlt() {                               // ページ例外ハンドラ
   int[] pageTable = curProc.pageTable;              // ページテーブルのアドレス
-  int pNum = in(0xA6);                              // 原因ページの番号
+  int pNum = in(MMU_FltPage);                       // 原因ページの番号
 #ifdef DEBUG
-  printF("tlbMiss(pNum=%x,pid=%d)\n", pNum, curProc.pid);
+  int fAdr = in(MMU_FltAdr);                        // 原因アドレス
+  printF("pageFault(fltAdr=%04x,pid=%d)\n", fAdr, curProc.pid);
 #endif
 
-  // 1. 該当ページが不在ならswap-inする
-  if ((pageTable[pNum] & VBIT)==0) {                // V=0ならページ不在
-    int pAdr = load(pNum*PAGESIZ);                  //  PMにswap-inさせる
-    if (pAdr==0) panic("tlbMiss");                  //  失敗したらパニック
-    release(pNum*PAGESIZ);                          //  SビットをOFFにする
-  }
-
-  // 2. 該当ページをTLBに書き加える
-  int tlbAdr = emptyTlb();                          // 空きTLBエントリを探す
-  if (tlbAdr<0) {                                   // 空きエントリがなければ
-    tlbAdr = quietTlb();                            //  低使用率エントリを探す
-    if (tlbAdr<0) {                                 //   適切なエントリ無しなら
-      tlbAdr = 0x80 + (rand() & 0x1c);              //    乱数(80〜9c)で決める
-    }                                               //  TLBエントリの追い出し
-    int outPage = in(tlbAdr);                       //   追い出すページの番号
-#ifdef DEBUG
-    printF("tlbFlush(pNum=%x)\n", outPage);
-#endif
-    int bits = pageTable[outPage]&(DBIT|RBIT|SBIT); //   これらのビットは累積
-    pageTable[outPage] = in(tlbAdr+2) | bits;       //   ページテーブルに戻す
-  }                                                 // TLBを更新する
-  out(tlbAdr, pNum);                                //  ページ番号を書き込む
-  out(tlbAdr+2, pageTable[pNum]);                   //  ページテーブルをコピー
-
-  // 3. TLBのRビットをflushする
-  for (int i=0x82; i<=0x9e; i=i+4) {                // 全TLBエントリについて
-    out(i, in(i) & ~RBIT);                          //  Rビットを0に書き換える
-  }
+  // 該当ページをswap-inする
+  int pAdr = load(pNum*PAGESIZ);                    //  PMにswap-inさせる
+  if (pAdr==0) panic("pageFlt");                    //  失敗したらパニック
+  release(pNum*PAGESIZ);                            //  SビットをOFFにする
 }

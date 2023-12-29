@@ -2,7 +2,7 @@
  * TacOS Source Code
  *    Tokuyama kousen Advanced educational Computer.
  *
- * Copyright (C) 2011 - 2022 by
+ * Copyright (C) 2011 - 2023 by
  *                      Dept. of Computer Science and Electronic Engineering,
  *                      Tokuyama College of Technology, JAPAN
  *
@@ -328,7 +328,7 @@ public void newProc(int start,int nice,int usp,int flag,PCB pcb,int[] fds) {
   int pid = nextPid();                              // PID を決定する
 
 #ifdef DEBUG
-  printF("newProc(start=%x,nice=%x,usp=%x,flag=%x),pid=%d\n",
+  printF("newProc(start=%04x,nice=%d,usp=%04x,flag=%04x),pid=%d\n",
          start, nice, usp, flag, pid);
 #endif
 

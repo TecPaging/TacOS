@@ -2,7 +2,7 @@
  * TacOS Source Code
  *    Tokuyama kousen Advanced educational Computer.
  *
- * Copyright (C) 2011 - 2018 by
+ * Copyright (C) 2011 - 2023 by
  *                      Dept. of Computer Science and Electronic Engineering,
  *                      Tokuyama College of Technology, JAPAN
  *
@@ -22,6 +22,7 @@
 /*
  * kernel/dispatcher.hmm : dispatcher.s の外部インタフェース
  *
+ * 2023.12.29 : tlbPid(MMUのTLBを使用中のプロセスのpid）を追加
  * 2018.01.27 : インクルードファイルの拡張子を .h から .hmm に変更
  * 2017.10.27 : 関数名を変更(dispatch() -> yield(), startProc() -> dispatch())
  * 2015.05.07 : 村田開発開始、ファイル名を変更(disp.h -> dispatcher.h)
@@ -35,3 +36,5 @@
 
 public void yield();     // CPUを解放する。（その後、dispatch()を実行する。）
 public void dispatch();  // readyQueue の先頭プロセスにディスパッチする。
+public int  tlbPid;      // MMUのTLBを使用中のプロセスのpid
+
