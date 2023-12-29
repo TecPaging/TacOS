@@ -2,7 +2,7 @@
  * TacOS Source Code
  *    Tokuyama kousen Advanced educational Computer.
  *
- * Copyright (C) 2011-2018 by
+ * Copyright (C) 2011-2023 by
  *                      Dept. of Computer Science and Electronic Engineering,
  *                      Tokuyama College of Technology, JAPAN
  *
@@ -66,8 +66,9 @@ struct MemBlk {                                 // 空き領域管理用の構�
 // メモリ管理の初期化
 MemBlk memPool = {null, 0};                     // 空き領域リストの番兵
 
-// _memSiz はcrt0.sが設定するベクタ領域の開始アドレス
-// または，frameInitが設定するページプールの開始アドレス
+// _memSiz は
+// 組込み版では，crt0.sが設定するベクタ領域の開始アドレス
+// 汎用版では，frameInitが設定するページプールの開始アドレス
 // ！！！frameInitを先に実行しておく必要がある！！！
 void mmInit() {                                 // プログラム起動前の初期化
   memPool.next = _ItoA(addrof(_end));           // 空き領域
