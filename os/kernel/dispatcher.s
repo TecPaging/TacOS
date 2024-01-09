@@ -73,7 +73,6 @@ _yield
         st      sp,0,g1         ; [G1+0] は PCB の sp フィールド
         ;
         ;------- [curProc の magic フィールド]をチェック ---------
-        ;ld      g0,30,g1        ; [G1+30] は PCB の magic フィールド
         ld      g0,34,g1        ; [G1+34] は PCB の magic フィールド
         cmp     g0,#0xabcd      ; P_MAGIC と比較、一致しなければ
         jnz     .stkOverFlow    ; カーネルスタックがオーバーフローしている

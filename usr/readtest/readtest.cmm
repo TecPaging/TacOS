@@ -62,6 +62,7 @@ public int main(int argc, char[][] argv) {
   int rawMode = mode & ~TTYCTL_MODE_COOKED;
   ttyCtl(TTYCTL_SETMODE, rawMode);            // RAWモードに変更
   int count = ttyRead(buf, 10);
+  if (count<0) exit(count);                   // ENOMEMの可能性がある
   buf[10] = '\0';                             // bufの終端を設定
   ttyCtl(TTYCTL_SETMODE, mode);               // 元のモードに戻す
   printf("\n[%d] \"%s\"\n", count, buf);

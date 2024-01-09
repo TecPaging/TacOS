@@ -1,0 +1,225 @@
+/*
+ * TacOS Source Code
+ *    Tokuyama kousen Advanced educational Computer.
+ *
+ * Copyright (C) 2023 by
+ *                      Dept. of Computer Science and Electronic Engineering,
+ *                      Tokuyama College of Technology, JAPAN
+ *
+ *   上記著作権者は，Free Software Foundation によって公開されている GNU 一般公
+ * 衆利用許諾契約書バージョン２に記述されている条件を満たす場合に限り，本ソース
+ * コード(本ソースコードを改変したものを含む．以下同様)を使用・複製・改変・再配
+ * 布することを無償で許諾する．
+ *
+ *   本ソースコードは＊全くの無保証＊で提供されるものである。上記著作権者および
+ * 関連機関・個人は本ソースコードに関して，その適用可能性も含めて，いかなる保証
+ * も行わない．また，本ソースコードの利用により直接的または間接的に生じたいかな
+ * る損害に関しても，その責任を負わない．
+ *
+ *
+ */
+
+/*
+ * pm/pm.cmm : プロセスマネージャ(PM)の本体、プロセスの生成と管理を行う
+ *
+ * 2023.12.31 : pm.cmm から分離
+ */
+
+#include <util.hmm>
+#include <kernel.hmm>
+#include <dispatcher.hmm>
+#include <process.hmm>
+#include <mm.hmm>
+#include <pm.hmm>
+#include "frame.hmm"
+
+//-----------------------------------------------------------------------------
+// フレームプール管理のデータ構造
+//-----------------------------------------------------------------------------
+int krnFrm;                                         // カーネルのフレーム数
+int numFrm;                                         // 利用可能なフレーム数
+
+// ページ置換えアルゴリズムにFIFO方式を使う
+// FIFOのデータ構造は番兵付きの双方向環状リスト
+// fwdLst[0]とbwdLst[0]がFIFOの番兵
+char[] fwdLst;                                      // フレームの順向きリスト
+char[] bwdLst;                                      // フレームの逆向きリスト
+#define SENTINEL 0                                  // 番兵は第0スロットを使用
+
+char[] page;                                        // フレームの割当ページ
+
+// フレームの所有プロセスはプロセステーブルのスロット番号で表現する
+char[] owner;                                       // フレームの所有プロセス
+#define NONE chr(0)                                 // 空きフレーム
+#define SYS  chr(1)                                 // ページテーブルなど
+                                                    // 5以上がユーザプロセス
+
+//-----------------------------------------------------------------------------
+// フレームプールの操作関数
+//-----------------------------------------------------------------------------
+// 双方向リストからフレームを削除する
+void delLst(int fNum) {
+  int next = fwdLst[fNum];
+  int prev = bwdLst[fNum];
+  fwdLst[prev] = chr(next);
+  bwdLst[next] = chr(prev);
+}
+
+// 双方向リストのnextの前にフレームを挿入する
+void insLst(int fNum, int next) {
+  int prev = bwdLst[next];
+  fwdLst[fNum] = chr(next);
+  bwdLst[fNum] = chr(prev);
+  fwdLst[prev] = chr(fNum);
+  bwdLst[next] = chr(fNum);
+}
+
+// 仮想メモリ用のフレームを空きフレームから割り付け(FIFOに入れる)
+public int assignFrame(int pNum, PCB pcb) {
+#ifdef DEBUG
+  printF("assignFrame(page=%02x,pid=%d,", pNum, pcb.pid);
+#endif
+  int fNum = 0;
+  int r = setPri(DI|KERN);                          // 排他のため
+  for (int i=1; i<=numFrm; i=i+1) {
+    if (owner[i]==NONE) {                           // 空きフレームを見つけた
+      insLst(i, SENTINEL);                          //  FIFOの最後に追加
+      owner[i] = chr(pcb.idx);                      //  所有プロセスを記録
+      page[i] = chr(pNum);                          //  割当られたページを記録
+      fNum = i + krnFrm - 1;                        //  実際のフレーム番号
+      break;                                        //  見つかった
+    }
+  }
+#ifdef DEBUG
+  printF("frame=%02x)\n", fNum);
+#endif
+  setPri(r);
+  return fNum;                                      // フレームを返す
+}                                                   //  無い場合は0を返す
+
+// releseFrameの実態
+void relFrame(int fNum) {                           // 指定したフレームを開放
+  int slot = owner[fNum];                           // フレームの所有者
+  if (slot!=NONE && slot!=SYS) {                    // 仮想メモリ用なら
+    PCB pcb = procTbl[slot];                        //  所有プロセスの
+    pcb.pageTable[ord(page[fNum])] = 0;             //   ページテーブルクリア
+    delLst(fNum);                                   //  FIFOから削除する
+  }
+  owner[fNum] = NONE;                               // 未使用の印
+}
+
+// フレームの解放(仮想メモリ用，ページテーブル用の兼用)
+public void releaseFrame(int fNum) {                // 指定したフレームを開放
+#ifdef DEBUG
+  printF("releaseFrame(%02x)\n", fNum);
+#endif
+  int r = setPri(DI|KERN);                          // 排他のため
+  relFrame(fNum - krnFrm + 1);                      // リスト内の位置に変換
+  setPri(r);
+}
+
+// 解放できるフレームか？
+boolean canRelease(int fNum) {
+  int slot = owner[fNum];                           // 所有プロセスのスロット
+  if (slot==SYS) return false;                      // フレームはシステム用
+  PCB pcb = procTbl[slot];                          // フレームの所有プロセス
+  int entry = pcb.pageTable[ord(page[fNum])];       // ページテーブルを読む
+  return (entry & (SBIT|WTBIT))==0;                 // S=0 && W=0 なら解放可
+}
+
+// ページテーブル用の連続2フレームの割り付け(FIFOに入れない)
+public int assignPagTbl() {                         // 2連続フレームの割り当て
+#ifdef DEBUG
+  printF("assignPagTbl(");
+#endif
+  int r = setPri(DI|KERN);                          // 排他のため
+  int fNum = 0;                                     // 連続フレームの候補
+  // 連続した空きフレームを探す
+  for (int i=1; i<numFrm; i=i+1) {                  // 全フレームについて
+    if (owner[i]==NONE && owner[i+1]==NONE) {       //  連続した2フレームが空き
+      fNum = i;                                     //   この2フレームを
+      break;                                        //    使用することが確定
+    }
+  }
+  // 見つからないなら解放可能フレームや空きフレームの連続を探す
+  // （空きフレームとの組合せを優先する）
+  if (fNum==0) {                                    // 見つからないなら
+    for (int i=fwdLst[SENTINEL]; i!=SENTINEL; i=fwdLst[i]) {      // FIFOの全フレームについて
+      if (canRelease(i)) {                          //  解放可能で
+        if (owner[i-1]==NONE) {                     //   前隣が空きなら
+          fNum = i - 1;                             //    前隣と2フレームを
+          break;                                    //     使用することに確定
+        } else if(owner[i+1]==NONE){                //   後隣が空きなら
+          fNum = i;                                 //    後隣と2フレームを
+          break;                                    //     使用することに確定
+        } else if (fNum==0 && canRelease(i-1)) {    //   候補なし前隣が解放可能
+          fNum = i - 1;                             //    前隣と2フレームが候補
+        } else if (fNum==0 && canRelease(i+1)) {    //   候補なし後隣が解放可能
+          fNum = i;                                 //    後隣と2フレームが候補
+        }
+      }
+    }
+  }
+  // 仕上げの処理
+  if (fNum!=0) {                                    // 見つかったなら
+    relFrame(fNum);                                 //  FIFOに入っているなら
+    relFrame(fNum+1);                               //   FIFOから取り出す
+    owner[fNum]=owner[fNum+1]=SYS;                  //  システムが使用中
+    fNum = fNum + krnFrm - 1;                       //  実フレーム番号に変換
+  }
+#ifdef DEBUG
+  printF("%02x,%02x)\n", fNum, fNum+1);
+#endif
+  setPri(r);
+  return fNum;                                      // 見つからないなら0を返す
+}
+
+// FIFOから解放できるフレームを捜して取り出し目的のプロセスに割り付ける
+public int reuseFrame(int pNum, PCB pcb) {
+  int r = setPri(DI|KERN);                          // 排他のため
+  int fNum = fwdLst[SENTINEL];                      // FIFOの最初のフレーム
+  while(fNum!=SENTINEL) {                           // FIFOの最後に達していない
+    if (canRelease(fNum)) {                         //  解放可能なフレームなら
+      relFrame(fNum);                               //   pagTableクリア,FIFO削除
+      insLst(fNum, SENTINEL);                       //   FIFOの最後へ追加
+      owner[fNum] = chr(pcb.idx);                   //   新しいプロセスを記録
+      page[fNum]  = chr(pNum);                      //   新しいページを記録
+      break;                                        //   見つかった
+    }
+    fNum = fwdLst[fNum];                            //  次のフレームを調べる
+  }
+  setPri(r);
+  if (fNum!=0) fNum = fNum + krnFrm - 1;            // フレーム番号に変換
+#ifdef DEBUG
+  printF("reuseFrame(page=%02x,pid=%d,frame=%02x)\n", pNum, pcb.pid, fNum);
+#endif
+  return fNum;
+}
+
+// 1フレームを0でクリアする
+public void clearFrame(int fNum) {
+  int pAdr = fNum*PAGESIZ;                          // フレームのアドレス
+  for(int i=0; i<PAGESIZ; i=i+2) {
+    WMEM[adrToWadr(pAdr+i)] = 0;                    // 物理メモリ(ワード単位)
+  }
+}
+
+// フレームプールの初期化（mmを使用するので実行順に注意）
+public void frameInit() {
+  krnFrm = adrToPage(_memSiz);                      // カーネルのフレーム数
+  numFrm = 255 - krnFrm;                            // フレームプールの大きさ
+                                                    //  (ベクタ領域を除く)
+  // 使用中フレームのFIFOは双方向環状リスト
+  fwdLst = malloc(numFrm+1);                        // 順方向リスト(番兵あり)
+  bwdLst = malloc(numFrm+1);                        // 逆方向リスト(番兵あり)
+  fwdLst[SENTINEL] = chr(SENTINEL);                 // 0番目は番兵として使用
+  bwdLst[SENTINEL] = chr(SENTINEL);                 // FIFOは空に初期化
+
+  // フレームが割り当てられたプロセスとページ
+  owner = malloc(numFrm+2);                         // 添字処理の都合で大きく
+  page  = malloc(numFrm+1);
+  for (int i=1; i<=numFrm; i=i+1) {
+    owner[i]  = NONE;                               // フレームは未使用
+  }
+  owner[SENTINEL] = owner[numFrm+1] = SYS;          // これらはシステムが使用中
+}

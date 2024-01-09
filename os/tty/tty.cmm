@@ -46,6 +46,7 @@
 #include <util.hmm>
 #include <kernel.hmm>
 #include <syscall.hmm>
+#include <errno.hmm>
 #include <pm.hmm>
 #include <mm.hmm>
 
@@ -76,6 +77,7 @@ public int ttyRead(void[] buf, int len) {
 public int _ttyRead(void[] buf, int len) {
   if (len<0) return -1;                                 // len<0 ならエラー
   char[] pBuf = malloc(len);                            // 物理空間のバッファ
+  if (pBuf==null) return ENOMEM;                        // メモリ不足
   int r = ttyRead(pBuf, len);                           // 物理アドレスで操作
   pokeM(_AtoI(buf), pBuf, len);                         // 仮想空間にコピー
   free(pBuf);
@@ -96,6 +98,7 @@ public int ttyWrite(void[] buf, int len) {
 public int _ttyWrite(void[] buf, int len) {
   if (len<0) return -1;                                 // len<0 ならエラー
   char[] pBuf = malloc(len);                            // 物理空間のバッファ
+  if (pBuf==null) return ENOMEM;                        // メモリ不足
   peekM(_AtoI(buf), pBuf, len);                         // 仮想空間から読み出す
   int r = ttyWrite(pBuf, len);                          // 物理アドレスで操作
   free(pBuf);

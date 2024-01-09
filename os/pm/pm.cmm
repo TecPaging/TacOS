@@ -73,6 +73,7 @@
 #include <fs.hmm>
 #include <file.hmm>
 #include "pm.hmm"
+#include "frame.hmm"
 #include "exeFile.hmm"
 
 #define MMU_TblReg   0xa6                           // ページテーブルレジスタ
@@ -81,77 +82,16 @@
 
 // PM は単一プロセスで実行されるので、ほとんどのグローバル変数アクセスで
 // 排他を気にしなくて良い
-//-----------------------------------------------------------------------------
-// フレームプール関係
-//-----------------------------------------------------------------------------
-// pm プロセス以外からも呼ばれる(exitシステムコール)ので排他が必要
-
 #define PCBSIZ (sizeof(PCB)+P_KERN_STKSIZ+P_FILE_MAX*sizeof(int)) // PCBサイズ
-#define HEPSIZ (PRC_MAX*PCBSIZ+(FILEMAX*(sizeof(File)+BLKSIZ)))   // ヒープ
+#define HEPSIZ (400+PRC_MAX*PCBSIZ+(FILEMAX*(sizeof(File)+BLKSIZ)))   // ヒープ
 
-char[] bitmap = array(32);                          // 32バイトのビットマップ
-
-int getFrame() {                                    // 空きフレームを割り当て
-  int r = setPri(DI|KERN);                          // 排他のため
-  for(int num=0; num<TOTALPAGE; num=num+1) {        // 全フレームについて
-    if(_readMap(bitmap, num)==0) {                  //   空きが見つかったら
-        _writeMap(bitmap, num, 1);                  //     使用中に変更
-        setPri(r);
-        return num;                                 //     フレーム番号を返す
-    }
-  }
-  setPri(r);
-  return -1;                                        // 見つからなかったらエラー
-}
-
-int get2Frame() {                                   // 2連続フレームの割り当て
-  int r = setPri(DI|KERN);                          // 排他のため
-  for(int num=0; num<TOTALPAGE; num=num+1){         // 全フレームについて
-    if(_readMap(bitmap, num)==0 &&                  //　 2フレーム連続した
-       _readMap(bitmap, num+1)==0) {                //    空きを探す
-        _writeMap(bitmap, num, 1);                  //      見つかったら
-        _writeMap(bitmap, num+1, 1);                //        使用中に変更
-        setPri(r);
-        return num;                                 // 1フレーム目の番号を返す
-    }
-  }
-  setPri(r);
-  return -1;                                        // 見つからなかったらエラー
-}
-
-void freeFrame(int num) {                           // 指定したフレームを開放
-  int r = setPri(DI|KERN);                          // 排他のため
-#ifdef DEBUG
-  printF("freeFrame(%02x)\n", num);
-#endif
-  if(_readMap(bitmap, num)==1) {                    // 指定した場所が1なら
-    _writeMap(bitmap, num, 0);                      // ビットマップに0を書き込み
-  }else{                                            // 指定した場所が0だったら
-    panic("freeFrame");                             // パニックを起こす
-  }
-  setPri(r);
-}
-
-public void frameInit() {                           // 初期化ルーチン
+//-----------------------------------------------------------------------------
+// pmプロセス起動前に実行する初期化ルーチン
+//-----------------------------------------------------------------------------
+public void pmInit() {                              // 初期化ルーチン
   // フレームプールのアドレス
   _memSiz = (addrof(_end)+ HEPSIZ+ PAGESIZ-1) & ~(PAGESIZ-1);
-  int kPage = adrToPage(_memSiz);                   // カーネルのページ数
-  for(int cnt=0; cnt<kPage; cnt=cnt+1) {            // カーネルが使用している
-    _writeMap(bitmap, cnt, 1);                      //   フレームは使用中に
-  }
-  _writeMap(bitmap, 0xff, 1);                       // ベクタ領域
 }
-
-//-----------------------------------------------------------------------------
-// ページテーブルの構造に関係する定数やマクロ
-//-----------------------------------------------------------------------------
-#define DBIT 0x0800                                     // Dirty(D)ビット
-#define RBIT 0x1000                                     // Reference(R)ビット
-#define SBIT 0x2000                                     // Sticky(S)ビット
-#define VBIT 0x8000                                     // Valid(V)ビット
-#define TEXTBITS 0x0500                                 // TEXTの保護ビット
-#define DATABITS 0x0600                                 // TEXT以外の保護ビット
-#define FBITS 0x00ff                                    // Frame番号
 
 //-----------------------------------------------------------------------------
 // ワード単位の read (EXE ファイル用なのでビッグエンディアンとして処理する)
@@ -164,54 +104,19 @@ int getWord(int fd) {
   return buf[0];
 }
 
-// 仮想アドレスを物理アドレスに変換する
-int vToP(int vAdr, PCB pcb) {                   
-  int entry = pcb.pageTable[adrToPage(vAdr)];       // ページテーブルエントリ
+// ページ番号をフレーム番号に変換する
+int pToF(int pNum, PCB pcb) {                   
+  int entry = pcb.pageTable[pNum];                  // ページテーブルエントリ
   if ((entry & VBIT)==0) return 0;                  // 変換できなかった
-  return ((entry&FBITS)*PAGESIZ) | adrToOffs(vAdr); // 物理アドレスを返す
+  return entry&FBITS;                               // フレーム番号を返す
 }
-
-// プロセス内で解放できるフレームを探す
-int searchFrame(PCB pcb) {
-  int fNum = -1;
-  int lastPage = adrToPage(pcb.textSiz-1);          // Text Segの最終ページ
-  int[] pageTable = pcb.pageTable;                  // プロセスのページテーブル
-  for(int pNum=0; pNum<=lastPage; pNum=pNum+1) {    // Text Segの全ページにつき
-    int entry = pageTable[pNum];                    //   エントリーを取り出す
-    if ((entry & (VBIT|SBIT))==VBIT) {              //   V=1,S=0 のページを探す
-      fNum = entry & FBITS;                         //     解放できるフレーム
-      pageTable[pNum] = 0x0000;                     //     エントリをクリアし
-      break;                                        //       フレームを解放する
-    } 
-  }
-  return fNum;                                      // フレーム番号を返す
-}                                                   // 見つからなかった場合は-1
-
-// 全ユーザプロセスについて解放できるフレームを探す
-int searchAllFrame() {
-  int fNum = -1;                                    // フレーム番号
-  for(int i=0; i<PRC_MAX; i=i+1) {                  // 全ユーザプロセスについて
-    PCB pcb = procTbl[i];                           // PCBを取り出し
-    if(pcb != null && pcb.pageTable != null) {      // PCBとpageTableが存在なら
-      fNum = searchFrame(pcb);                      // 解放できるフレームを探す
-      if(fNum >= 0) break;                          // フレームが見つかった
-    }
-  }
-#ifdef DEBUG
-  printF("searchAllFrame(fNum=%02x)\n",fNum); 
-#endif
-  return fNum;                                      // フレーム番号を返す
-}                                                   // 見つからない場合は-1
 
 // フレームを割り当てページテーブルに記憶する
 int allocFrame(int pNum, PCB pcb) {
-  int fNum = getFrame();                            // フレームを割り当て
-  if (fNum < 0) {                                   // 空きフレームがなかったら
-    fNum = searchAllFrame();                        // 解放できるフレームを探す
-  #ifdef DEBUG
-    printF("allocFrame(releaseFrame=%02x)\n",fNum);
-  #endif
-    if (fNum < 0) panic("allocFrame");              // 解放できなかった
+  int fNum = assignFrame(pNum, pcb);                // フレームを割り当て
+  if (fNum == 0) {                                  // 空きフレームがなかったら
+    fNum = reuseFrame(pNum, pcb);                   // フレームを再利用する
+    if (fNum == 0) panic("allocFrame");             // 再利用できるものも無い
     tlbPid = 0;                                     // dispatch時にTLBをflush
   }
   if (pNum < adrToPage(pcb.textSiz)) {
@@ -223,14 +128,6 @@ int allocFrame(int pNum, PCB pcb) {
   printF("allocFrame(pageTable[%02x]=%04x)\n", pNum, pcb.pageTable[pNum]);
 #endif
   return fNum;                                      // フレーム番号を返す
-}
-
-// 1フレームを0でクリアする
-void clearFrame(int fNum) {
-  int pAdr = fNum*PAGESIZ;                          // フレームのアドレス
-  for(int i=0; i<PAGESIZ; i=i+2) {
-    WMEM[adrToWadr(pAdr+i)] = 0;                    // 物理メモリ(ワード単位)
-  }
 }
 
 // 該当ページをexeファイルから読み込む
@@ -247,18 +144,17 @@ void swapIn(int pNum, int fNum, PCB pcb) {
 
 // フレームを配置し物理アドレスを返す
 int locateFrame(int vAdr, PCB pcb) {
-  int pAdr = vToP(vAdr, pcb);                       // 物理アドレスに変換
-  if (pAdr==0) {                                    // フレームない
-    int pNum = adrToPage(vAdr);                     //  ページ番号を計算
-    int fNum = allocFrame(pNum, pcb);               //  フレームを割り当てる
+  int pNum = adrToPage(vAdr);                       // ページ番号に変換
+  int fNum = pToF(pNum, pcb);                       // フレーム番号に変換
+  if (fNum==0) {                                    // フレームがない
+    fNum = allocFrame(pNum, pcb);                   //  フレームを割り当てる
     if (_uCmp(vAdr, pcb.textSiz+pcb.dataSiz)<0) {   //  exeファイルに該当する
       swapIn(pNum, fNum, pcb);                      //   exeファイルを読む
     } else {                                        //  exeファイルに該当しない
       clearFrame(fNum);                             //   フレームをクリア
     }
-    pAdr = fNum*PAGESIZ+adrToOffs(vAdr);            //  物理アドレスを求める
   }
-  return pAdr;                                      // 物理アドレスを返す
+  return fNum*PAGESIZ+adrToOffs(vAdr);              // 物理アドレスを返す
 }
 
 //-----------------------------------------------------------------------------
@@ -308,6 +204,7 @@ int sysPeekS(int vAdr, PCB pcb) {
   for ( ;peekB(vAdr+len, pcb)!='\0'; len=len+1) {   // 文字列の長さ
   }
   char[] buf = malloc(len+1);                       // 領域を確保
+  if (buf==null) return 0;                          // メモリ不足(0はnull)
   for (int i=0; i<=len; i=i+1) {
     buf[i] = peekB(vAdr+i, pcb);                    // bufに文字列コピー
   }
@@ -476,7 +373,7 @@ int sysExec(int path, int argv, int envp, PCB pcb) {
   }
 
   // ページテーブルを確保し初期化する
-  int fNum = get2Frame();                           // 連続した2フレームを確保
+  int fNum = assignPagTbl();                        // ページテーブルを確保
 #ifdef DEBUG
   printF("pageTable=%02x,%02x\n", fNum, fNum+1);
 #endif
@@ -484,23 +381,21 @@ int sysExec(int path, int argv, int envp, PCB pcb) {
     close(fd);                                      //   exeファイルを閉じて
     return ENOMEM;                                  //   エラー番号を返す
   }
-  int[] pageTable = _ItoA(fNum*PAGESIZ);            // ページテーブル配列
-  for(int pNum=0; pNum<TOTALPAGE; pNum=pNum+1){     // ページテーブルを
-    pageTable[pNum] = 0;                            //   クリアする
-  }
+  clearFrame(fNum);                                 // ページテーブルを
+  clearFrame(fNum+1);                               //  0でクリアする
 
   // PCB領域を確保する
   PCB newPcb = malloc(PCBSIZ);                      // PCB領域を確保
   if (newPcb==null) {                               //   エラー発生
-    freeFrame(fNum);                                //   フレームを解放
-    freeFrame(fNum+1);                              //   2フレーム目を解放
+    releaseFrame(fNum);                             //   ページテーブルを解放
+    releaseFrame(fNum+1);                           //   2フレーム目を解放
     close(fd);                                      //   exeファイルを閉じて
     return ENOMEM;                                  //   エラー番号を返す
   }
 
   // PCBにページテーブルを登録する
   // (copyArgsEnvpより前にやる必要がある)
-  newPcb.pageTable = pageTable;                     // PCBにページテーブル登録
+  newPcb.pageTable = _ItoA(fNum*PAGESIZ);           // PCBにページテーブル登録
 #ifdef DEBUG
   newPcb.pid = -1;        // デバッグ表示のpid部分を未定を表す-1にするため
 #endif
@@ -566,6 +461,7 @@ int pmSysCall(int op, int prm1, int prm2, int prm3, PCB pcb) {
 interrupt pageFlt();                                // ページ例外ハンドラ
 
 public void pmMain() {
+  frameInit();                                      // フレーム管理の初期化
   int[] VECTOR = _ItoA(0xffe0);
   VECTOR[10] = addrof(pageFlt);                     // Page Fault ハンドラ登録
   pmLink = newLink();                               // リンクを生成する
@@ -622,6 +518,9 @@ public int pokeM(int vAdr, void[] pAdr, int size) {
 //-----------------------------------------------------------------------------
 // init が呼び出す exec システムコール
 public int exec(char[] path, char[][] argv, char[][] envp) {
+#ifdef DEBUG
+  printF("exec(path=%s)\n", path);
+#endif
   int r=sndrec(pmLink, EXEC, _AtoI(path), _AtoI(argv), _AtoI(envp));
   return r;
 }
@@ -629,9 +528,7 @@ public int exec(char[] path, char[][] argv, char[][] envp) {
 // ユーザ用の exec システムコール
 public int _exec(char[] path, char[][] argv, char[][] envp) {
   char[] str = peekS(_AtoI(path));                  // pmのシステムコール
-#ifdef DEBUG
-  printF("_exec(path=%s)\n", str);
-#endif
+  if (str==null) return ENOMEM;                     // メモリ不足
   int r=exec(str, argv, envp);
   free(str);
   return r;                                         // 新しい子の PID を返す
@@ -648,13 +545,15 @@ void freePageTable(PCB pcb) {
   for (int pNum=0; pNum<TOTALPAGE; pNum=pNum+1) {   // ページテーブルのidx
     int entry = pageTable[pNum];
     if ((entry&VBIT)!=0) {                          // Vビットが1なら
-      freeFrame(entry & FBITS);                     // フレーム解放
+      releaseFrame(entry & FBITS);                  // フレーム解放
+      // tlbPid = 0;                                // dispatch時にTLBをflush
+                                                    //  exitしたからflush不要
     }
   }
   // ページテーブルの解放
   int fNum =  adrToFrame(_AtoI(pageTable));         // アドレスのフレーム番号
-  freeFrame(fNum);                                  // フレームを解放
-  freeFrame(fNum+1);                                // 2フレーム目を解放
+  releaseFrame(fNum);                               // フレームを解放
+  releaseFrame(fNum+1);                             // 2フレーム目を解放
 }
 
 // 現在のプロセスをゾンビにする(カレントプロセスが exit の後半で呼出す)
@@ -748,6 +647,7 @@ public int wait(int[] sta) {
 
 public int _wait(int[] sta) {                       // ユーザプロセス用の入り口
   int[] buf = malloc(sizeof(int));                  // 物理メモリを確保
+  if (buf==null) return ENOMEM;                     // メモリ不足
   int r = wait(buf);                                // システムコール本体を実行
   if (r>=0) {                                       // エラーでなければ
     sndrec(pmLink, POKEW, _AtoI(sta), buf[0], 0);   //   ステータスを書き込む

@@ -328,7 +328,7 @@ public void newProc(int start,int nice,int usp,int flag,PCB pcb,int[] fds) {
   int pid = nextPid();                              // PID を決定する
 
 #ifdef DEBUG
-  printF("newProc(start=%04x,nice=%d,usp=%04x,flag=%04x),pid=%d\n",
+  printF("newProc(start=%04x,nice=%d,usp=%04x,flag=%04x,pid=%d)\n",
          start, nice, usp, flag, pid);
 #endif
 
@@ -522,24 +522,36 @@ void lnkInit() {
 //----------------------------------------------------------------------------
 // 例外処理ルーチン
 //----------------------------------------------------------------------------
-#define isUser() ((ord(MEM[_fp()+9])&KERN)==0)      // ユーザプロセス
+//       stack
+// fp -> fp     0, 1      例外前のFP
+//       g2     2, 3      例外前のG2
+//       g1     4, 5      例外前のG1
+//       g0     6, 7      例外前のG0
+//       flag   8, 9      例外前のFLAG
+//       pc    10,11      例外前のPC
+#define isUser() ((ord(MEM[_fp()+9])&KERN)==0)      // 例外前はユーザモード
+#define pc()     WMEM[(_fp()+10)/2]                 // 例外前のPC
 
 // 例外がユーザモードで発生したならユーザプロセスを終了させる
 // カーネルモードで発生したならカーネルのバグなので panic()
 void exception(int errno, char[] msg) {
 #ifdef DEBUG
-  panic("exception(%d, \"%s\")\n", errno, msg);
-#endif
+  panic("exception(errno=%d,\"%s\",pc=%04x)\n", errno, msg, pc());
+#else
 #ifndef EMBEDDED
   if (isUser()) exit(errno);
   else          panic(msg);
 #else
   panic(msg);
 #endif
+#endif
 }
 
 // メモリ保護違反
 interrupt memVio() {
+#ifdef DEBUG
+  printF("### IO[a2h]=%04x,IO[a4h]=%02x ###\n", in(0xa2), in(0xa4));
+#endif
   exception(EMEMVIO, "memVio");
 }
 
@@ -584,7 +596,9 @@ public void main() {
   semInit();                                        // セマフォ(semTbl)初期化
   lnkInit();                                        // リンク(lnkTbl)初期化
 #ifndef EMBEDDED
-  frameInit();                                      // フレームプールの初期化
+  pmInit();                                         // mmが使用するヒープ領域と
+                                                    //  pmのフレームプールの
+                                                    //  境界を_memSizに設定する
   ttyInit();                                        // TTY初期化
 #endif
   procInit();                                       // プロセス(procTbl)初期化

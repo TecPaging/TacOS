@@ -2,7 +2,7 @@
  * TacOS Source Code
  *    Tokuyama kousen Advanced educational Computer.
  *
- * Copyright (C) 2011 - 2018 by
+ * Copyright (C) 2011 - 2023 by
  *                      Dept. of Computer Science and Electronic Engineering,
  *                      Tokuyama College of Technology, JAPAN
  *
@@ -39,13 +39,27 @@
 public int pmLink;
 public void pmMain();
 
+/*-----------------------------------------------------------------------------
+ * ページテーブルの構造に関係する定数やマクロ
+ */
+#define DBIT 0x0800                                     // Dirty(D)ビット
+#define RBIT 0x1000                                     // Reference(R)ビット
+#define SBIT 0x2000                                     // Sticky(S)ビット
+#define VBIT 0x8000                                     // Valid(V)ビット
+#define RDBIT 0x0400                                    // Readビット
+#define WTBIT 0x0200                                    // Writeビット
+#define EXBIT 0x0100                                    // Executeビット
+#define TEXTBITS 0x0500                                 // TEXTの保護ビット
+#define DATABITS 0x0600                                 // TEXT以外の保護ビット
+#define FBITS 0x00ff                                    // Frame番号
+
 /*----------------------------------------------------------------------------
- *   名前   : frameInit
+ *   名前   : pmInit
  *   戻り値 : なし
  *   引数   : なし
- *   解説   : フレームプールの初期化を行う
+ *   解説   : _memSizにmmのヒープ領域とpmのフレームプール領域の境界を設定する
  */
-public void frameInit();
+public void pmInit();
 
 /*----------------------------------------------------------------------------
  *   名前   : peekS

@@ -183,6 +183,9 @@ public void mmMain() {
 // malloc システムコール
 public  void[] malloc(int s) {
   int addr = sndrec(mmLink, MALLOC, s, 0, 0);
+#ifdef DEBUG
+  if (addr==0) panic("malloc");
+#endif
   return _ItoA(addr);                           // 領域の先頭アドレスを返す
 }
 

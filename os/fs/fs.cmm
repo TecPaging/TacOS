@@ -59,6 +59,7 @@
 #include "fs.hmm"
 
 #ifndef EMBEDDED
+#include <errno.hmm>
 #include <mm.hmm>
 #include <pm.hmm>
 #endif
@@ -193,6 +194,7 @@ public int seek(int fd, int ptrh, int ptrl) {
 // 仮想空間のパス名を引数とするシステムコールの発行ルーチン
 int _peekSndrec(int com, char[] path, int prm3, int prm4) {
   path = peekS(_AtoI(path));                            // パスを読む
+  if (path==null) return ENOMEM;                        // メモリ不足
   int r = sndrec(fsLink, com, _AtoI(path), prm3, prm4); // システムコール実行
   free(path);                                           // パスを解放する
   return r;
@@ -271,6 +273,7 @@ public int _write(int fd, void[] buf, int len) {
 // ユーザプロセス用の stat の入り口
 public int _stat(char[] path, Stat stat) {
   Stat tmp = malloc(sizeof(Stat));                  // 結果を書き込む物理メモリ
+  if (tmp==null) return ENOMEM;                     // メモリ不足
   int r = _peekSndrec(STAT, path, _AtoI(tmp), 0);   // pathを読出した上でsndrec
   pokeM(_AtoI(stat), tmp, sizeof(Stat));            // 結果を仮想空間に書き込む
   free(tmp);                                        // 物理メモリを解放
