@@ -522,21 +522,25 @@ void lnkInit() {
 //----------------------------------------------------------------------------
 // 例外処理ルーチン
 //----------------------------------------------------------------------------
-//       stack
-// fp -> fp     0, 1      例外前のFP
-//       g2     2, 3      例外前のG2
-//       g1     4, 5      例外前のG1
-//       g0     6, 7      例外前のG0
-//       flag   8, 9      例外前のFLAG
-//       pc    10,11      例外前のPC
-#define isUser() ((ord(MEM[_fp()+9])&KERN)==0)      // 例外前はユーザモード
-#define pc()     WMEM[(_fp()+10)/2]                 // 例外前のPC
 
 // 例外がユーザモードで発生したならユーザプロセスを終了させる
 // カーネルモードで発生したならカーネルのバグなので panic()
+// -- exception実行時のスタック --
+// fp -> fp     0, 1      ハンドラのFP
+//       pc     2, 3      1ハンドラのPC
+//       errno  4, 5      exceptionの第1引数
+//       msg    6, 7      exceptionの第2引数
+//       fp     8, 9      割込み前のFP
+//       g2    10,11      割込み前のG2
+//       g1    12,13      割込み前のG1
+//       g0    14,15      割込み前のG0
+//       flag  16,17      割込み前のFLAG
+//       pc    18,19      割込み前のPC
+#define isUser() ((ord(MEM[_fp()+17])&KERN)==0)      // 例外前はユーザモード
+
 void exception(int errno, char[] msg) {
 #ifdef DEBUG
-  panic("exception(errno=%d,\"%s\",pc=%04x)\n", errno, msg, pc());
+  panic("exception(errno=%d,\"%s\")\n", errno, msg);
 #else
 #ifndef EMBEDDED
   if (isUser()) exit(errno);
@@ -547,9 +551,25 @@ void exception(int errno, char[] msg) {
 #endif
 }
 
+// -- 割込みハンドラ実行時のスタック --
+// fp -> fp     0, 1      割込み前のFP
+//       g2     2, 3      割込み前のG2
+//       g1     4, 5      割込み前のG1
+//       g0     6, 7      割込み前のG0
+//       flag   8, 9      割込み前のFLAG
+//       pc    10,11      割込み前のPC
+#define ofp()    WMEM[(_fp()+0)/2]                  // 例外前のfp
+#define g2()     WMEM[(_fp()+2)/2]                  // 例外前のG2
+#define g1()     WMEM[(_fp()+4)/2]                  // 例外前のG1
+#define g0()     WMEM[(_fp()+6)/2]                  // 例外前のG0
+#define flag()   WMEM[(_fp()+8)/2]                  // 例外前のflag
+#define pc()     WMEM[(_fp()+10)/2]                 // 例外前のPC
+
 // メモリ保護違反
 interrupt memVio() {
 #ifdef DEBUG
+  printF("### pc=%04x,flag=%04x,g0=%04x,g1=%04x,g2=%04x,fp=%04x ###\n",
+         pc(), flag(), g0(), g1(), g2(), ofp());
   printF("### IO[a2h]=%04x,IO[a4h]=%02x ###\n", in(0xa2), in(0xa4));
 #endif
   exception(EMEMVIO, "memVio");

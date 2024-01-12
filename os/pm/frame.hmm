@@ -30,5 +30,4 @@ public int assignFrame(int pNum, PCB pcb);      // プロセスにフレーム�
 public void releaseFrame(int frm);              // フレームを解放する 
 public int assignPagTbl();                      // ページテーブル用フレーム確保
 public int reuseFrame(int pNum, PCB pcb);       // 解放できるフレームを再使用
-public void clearFrame(int fNum);               // フレームをゼロでクリアする
 public void frameInit();                        // 初期化ルーチン(mm起動後使用)

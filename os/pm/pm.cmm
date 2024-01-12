@@ -142,6 +142,14 @@ void swapIn(int pNum, int fNum, PCB pcb) {
   if (r!=PAGESIZ) panic("swapin-read");             // readに失敗
 }
 
+// 1フレームを0でクリアする
+void clearFrame(int fNum) {
+  int wAdr = adrToWadr(fNum*PAGESIZ);               // フレームの物理アドレス
+  for(int i=0; i<PAGESIZ/2; i=i+1) {                //  (ワード単位)
+    WMEM[wAdr+i] = 0;                               // 物理メモリ(ワード単位)
+  }
+}
+
 // フレームを配置し物理アドレスを返す
 int locateFrame(int vAdr, PCB pcb) {
   int pNum = adrToPage(vAdr);                       // ページ番号に変換

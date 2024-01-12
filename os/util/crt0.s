@@ -2,7 +2,7 @@
 ; TacOS Source Code
 ;    Tokuyama kousen Advanced educational Computer
 ;
-; Copyright (C) 2009-2022 by
+; Copyright (C) 2009-2024 by
 ;                      Dept. of Computer Science and Electronic Engineering,
 ;                      Tokuyama College of Technology, JAPAN
 ;
@@ -20,6 +20,7 @@
 ;
 ; util/crt0.s : カーネル用スタートアップ
 ;
+; 2024.01.12 : _fpのバグを訂正
 ; 2022.08.27 : _mul32のバグを訂正
 ; 2022.07.08 : _readMap,_writeMap追加
 ; 2022.07.01 : Tec7d専用(SPの位置は常に0xffe0)
@@ -86,7 +87,7 @@ _pause
 
 ;; FP の値を取得する
 __fp
-        ld      g0,0,fp
+        ld      g0,fp
         ret
 
 ;; アドレスから整数へ変換

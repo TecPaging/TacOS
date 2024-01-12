@@ -196,14 +196,6 @@ public int reuseFrame(int pNum, PCB pcb) {
   return fNum;
 }
 
-// 1フレームを0でクリアする
-public void clearFrame(int fNum) {
-  int pAdr = fNum*PAGESIZ;                          // フレームのアドレス
-  for(int i=0; i<PAGESIZ; i=i+2) {
-    WMEM[adrToWadr(pAdr+i)] = 0;                    // 物理メモリ(ワード単位)
-  }
-}
-
 // フレームプールの初期化（mmを使用するので実行順に注意）
 public void frameInit() {
   krnFrm = adrToPage(_memSiz);                      // カーネルのフレーム数
