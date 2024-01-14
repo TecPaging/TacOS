@@ -20,7 +20,8 @@
  */
 
 /*
- * pm/pm.cmm : プロセスマネージャ(PM)の本体、プロセスの生成と管理を行う
+ * pm/frame.cmm : プロセスマネージャ(PM)のページ割り付けアルゴリズム
+ *                （フレーム管理）
  *
  * 2023.12.31 : pm.cmm から分離
  */
@@ -46,32 +47,36 @@ char[] fwdLst;                                      // フレームの順向き�
 char[] bwdLst;                                      // フレームの逆向きリスト
 #define SENTINEL 0                                  // 番兵は第0スロットを使用
 
-char[] page;                                        // フレームの割当ページ
-
+// フレームが割当てられたプロセスとページ
 // フレームの所有プロセスはプロセステーブルのスロット番号で表現する
 char[] owner;                                       // フレームの所有プロセス
 #define NONE chr(0)                                 // 空きフレーム
 #define SYS  chr(1)                                 // ページテーブルなど
                                                     // 5以上がユーザプロセス
+char[] page;                                        // フレームの割当ページ
+
+// フレーム番号とFIFOデータ構造の添字の相互変換
+#define idxToFnum(idx) ((idx) + krnFrm - 1)         // リスト添字->フレーム番号
+#define fNumToIdx(fNum) ((fNum) - krnFrm + 1)       // フレーム番号->リスト添字
 
 //-----------------------------------------------------------------------------
 // フレームプールの操作関数
 //-----------------------------------------------------------------------------
 // 双方向リストからフレームを削除する
-void delLst(int fNum) {
-  int next = fwdLst[fNum];
-  int prev = bwdLst[fNum];
+void delLst(int fIdx) {
+  int next = fwdLst[fIdx];
+  int prev = bwdLst[fIdx];
   fwdLst[prev] = chr(next);
   bwdLst[next] = chr(prev);
 }
 
 // 双方向リストのnextの前にフレームを挿入する
-void insLst(int fNum, int next) {
+void insLst(int fIdx, int next) {
   int prev = bwdLst[next];
-  fwdLst[fNum] = chr(next);
-  bwdLst[fNum] = chr(prev);
-  fwdLst[prev] = chr(fNum);
-  bwdLst[next] = chr(fNum);
+  fwdLst[fIdx] = chr(next);
+  bwdLst[fIdx] = chr(prev);
+  fwdLst[prev] = chr(fIdx);
+  bwdLst[next] = chr(fIdx);
 }
 
 // 仮想メモリ用のフレームを空きフレームから割り付け(FIFOに入れる)
@@ -86,7 +91,7 @@ public int assignFrame(int pNum, PCB pcb) {
       insLst(i, SENTINEL);                          //  FIFOの最後に追加
       owner[i] = chr(pcb.idx);                      //  所有プロセスを記録
       page[i] = chr(pNum);                          //  割当られたページを記録
-      fNum = i + krnFrm - 1;                        //  実際のフレーム番号
+      fNum = idxToFnum(i);                          //  フレーム番号に変換
       break;                                        //  見つかった
     }
   }
@@ -97,33 +102,34 @@ public int assignFrame(int pNum, PCB pcb) {
   return fNum;                                      // フレームを返す
 }                                                   //  無い場合は0を返す
 
-// releseFrameの実態
-void relFrame(int fNum) {                           // 指定したフレームを開放
-  int slot = owner[fNum];                           // フレームの所有者
-  if (slot!=NONE && slot!=SYS) {                    // 仮想メモリ用なら
-    PCB pcb = procTbl[slot];                        //  所有プロセスの
-    pcb.pageTable[ord(page[fNum])] = 0;             //   ページテーブルクリア
-    delLst(fNum);                                   //  FIFOから削除する
+// FIFOとページテーブルからフレーム削除(仮想メモリ用，ページテーブル用の兼用)
+//  FIFOに入っていないフレームを指定してよびだされることもある
+void relFrame(int idx) {                            // 指定したフレームを開放
+  int slot = owner[idx];                            // フレームの所有者
+  if (slot!=NONE && slot!=SYS) {                    // 仮想メモリ用フレームなら
+    PCB pcb = procTbl[idx];                         //  所有プロセスの
+    pcb.pageTable[ord(page[idx])] = 0;              //   ページテーブルクリア
+    delLst(idx);                                    //  FIFOから削除する
   }
-  owner[fNum] = NONE;                               // 未使用の印
+  owner[idx] = NONE;                                // フレームは空き
 }
 
-// フレームの解放(仮想メモリ用，ページテーブル用の兼用)
+// フレームの解放
 public void releaseFrame(int fNum) {                // 指定したフレームを開放
 #ifdef DEBUG
   printF("releaseFrame(%02x)\n", fNum);
 #endif
   int r = setPri(DI|KERN);                          // 排他のため
-  relFrame(fNum - krnFrm + 1);                      // リスト内の位置に変換
+  relFrame(fNumToIdx(fNum));                        // フレームの解放
   setPri(r);
 }
 
 // 解放できるフレームか？
-boolean canRelease(int fNum) {
-  int slot = owner[fNum];                           // 所有プロセスのスロット
+boolean canRelease(int idx) {
+  int slot = owner[idx];                            // 所有プロセスのスロット
   if (slot==SYS) return false;                      // フレームはシステム用
   PCB pcb = procTbl[slot];                          // フレームの所有プロセス
-  int entry = pcb.pageTable[ord(page[fNum])];       // ページテーブルを読む
+  int entry = pcb.pageTable[ord(page[idx])];        // ページテーブルを読む
   return (entry & (SBIT|WTBIT))==0;                 // S=0 && W=0 なら解放可
 }
 
@@ -133,63 +139,65 @@ public int assignPagTbl() {                         // 2連続フレームの割
   printF("assignPagTbl(");
 #endif
   int r = setPri(DI|KERN);                          // 排他のため
-  int fNum = 0;                                     // 連続フレームの候補
+  int idx = 0;                                      // 連続フレームの候補
   // 連続した空きフレームを探す
   for (int i=1; i<numFrm; i=i+1) {                  // 全フレームについて
     if (owner[i]==NONE && owner[i+1]==NONE) {       //  連続した2フレームが空き
-      fNum = i;                                     //   この2フレームを
+      idx = i;                                      //   この2フレームを
       break;                                        //    使用することが確定
     }
   }
   // 見つからないなら解放可能フレームや空きフレームの連続を探す
   // （空きフレームとの組合せを優先する）
-  if (fNum==0) {                                    // 見つからないなら
-    for (int i=fwdLst[SENTINEL]; i!=SENTINEL; i=fwdLst[i]) {      // FIFOの全フレームについて
+  if (idx==0) {                                     // 見つからないなら
+    // FIFOの全フレームについて
+    for (int i=fwdLst[SENTINEL]; i!=SENTINEL; i=fwdLst[i]) {
       if (canRelease(i)) {                          //  解放可能で
         if (owner[i-1]==NONE) {                     //   前隣が空きなら
-          fNum = i - 1;                             //    前隣と2フレームを
+          idx = i - 1;                              //    前隣と2フレームを
           break;                                    //     使用することに確定
         } else if(owner[i+1]==NONE){                //   後隣が空きなら
-          fNum = i;                                 //    後隣と2フレームを
+          idx = i;                                  //    後隣と2フレームを
           break;                                    //     使用することに確定
-        } else if (fNum==0 && canRelease(i-1)) {    //   候補なし前隣が解放可能
-          fNum = i - 1;                             //    前隣と2フレームが候補
-        } else if (fNum==0 && canRelease(i+1)) {    //   候補なし後隣が解放可能
-          fNum = i;                                 //    後隣と2フレームが候補
+        } else if (idx==0 && canRelease(i-1)) {     //   候補なし前隣が解放可能
+          idx = i - 1;                              //    前隣と2フレームが候補
+        } else if (idx==0 && canRelease(i+1)) {     //   候補なし後隣が解放可能
+          idx = i;                                  //    後隣と2フレームが候補
         }
       }
     }
   }
   // 仕上げの処理
-  if (fNum!=0) {                                    // 見つかったなら
-    relFrame(fNum);                                 //  FIFOに入っているなら
-    relFrame(fNum+1);                               //   FIFOから取り出す
-    owner[fNum]=owner[fNum+1]=SYS;                  //  システムが使用中
-    fNum = fNum + krnFrm - 1;                       //  実フレーム番号に変換
+  int fNum = 0;                                     // 返すフレーム番号
+  if (idx!=0) {                                     // 見つかったなら
+    relFrame(idx);                                  //  FIFOに入っているなら
+    relFrame(idx+1);                                //   FIFOから取り出す
+    owner[idx]=owner[idx+1]=SYS;                    //  システムが使用中
+    fNum = idxToFnum(idx);                          //  フレーム番号に変換
   }
 #ifdef DEBUG
   printF("%02x,%02x)\n", fNum, fNum+1);
 #endif
   setPri(r);
-  return fNum;                                      // 見つからないなら0を返す
+  return fNum;                                      // フレーム番号を返す
 }
 
 // FIFOから解放できるフレームを捜して取り出し目的のプロセスに割り付ける
 public int reuseFrame(int pNum, PCB pcb) {
   int r = setPri(DI|KERN);                          // 排他のため
-  int fNum = fwdLst[SENTINEL];                      // FIFOの最初のフレーム
-  while(fNum!=SENTINEL) {                           // FIFOの最後に達していない
-    if (canRelease(fNum)) {                         //  解放可能なフレームなら
-      relFrame(fNum);                               //   pagTableクリア,FIFO削除
-      insLst(fNum, SENTINEL);                       //   FIFOの最後へ追加
-      owner[fNum] = chr(pcb.idx);                   //   新しいプロセスを記録
-      page[fNum]  = chr(pNum);                      //   新しいページを記録
+  int fNum = 0;                                     // 見つけたフレーム
+  // FIFOの全フレームについて
+  for (int i=fwdLst[SENTINEL]; i!=SENTINEL; i=fwdLst[i]) {
+    if (canRelease(i)) {                            //  解放可能なフレームなら
+      relFrame(i);                                  //   pagTableクリア,FIFO削除
+      insLst(i, SENTINEL);                          //   FIFOの最後へ追加
+      owner[i] = chr(pcb.idx);                      //   新しいプロセスを記録
+      page[i]  = chr(pNum);                         //   新しいページを記録
+      fNum = idxToFnum(i);                          //   フレーム番号に変換
       break;                                        //   見つかった
     }
-    fNum = fwdLst[fNum];                            //  次のフレームを調べる
   }
   setPri(r);
-  if (fNum!=0) fNum = fNum + krnFrm - 1;            // フレーム番号に変換
 #ifdef DEBUG
   printF("reuseFrame(page=%02x,pid=%d,frame=%02x)\n", pNum, pcb.pid, fNum);
 #endif

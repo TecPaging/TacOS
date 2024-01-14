@@ -65,7 +65,7 @@
  */
 
 #include <errno.hmm>
-#include <util.hmm>
+#include <util.hmm>                                 // _memSizの宣言はこの中
 #include <kernel.hmm>
 #include <dispatcher.hmm>
 #include <syscall.hmm>
@@ -83,7 +83,7 @@
 // PM は単一プロセスで実行されるので、ほとんどのグローバル変数アクセスで
 // 排他を気にしなくて良い
 #define PCBSIZ (sizeof(PCB)+P_KERN_STKSIZ+P_FILE_MAX*sizeof(int)) // PCBサイズ
-#define HEPSIZ (400+PRC_MAX*PCBSIZ+(FILEMAX*(sizeof(File)+BLKSIZ)))   // ヒープ
+#define HEPSIZ (PRC_MAX*PCBSIZ+(FILEMAX*(sizeof(File)+BLKSIZ)))   // ヒープ
 
 //-----------------------------------------------------------------------------
 // pmプロセス起動前に実行する初期化ルーチン
@@ -347,6 +347,7 @@ int listToArry(int pLst, int pLim) {
 //   スタックは子プロセス(cPcb)の仮想空間に割付
 int copyArgsEnvp(int argv, int envp, PCB pPcb, PCB cPcb) {
   int fNum = allocFrame(LASTPAGE, cPcb);            // 子プロセスのスタック領域
+  clearFrame(fNum);                                 //   フレームをクリア
   int pAdr = fNum * PAGESIZ;                        // 物理アドレス
   int pLim = pAdr + PAGESIZ;                        // 領域の最後
 
