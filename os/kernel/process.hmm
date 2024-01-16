@@ -59,8 +59,8 @@
 // ------------------------------ プロセス関連 --------------------------------
 #define PRC_MAX 10        // プロセスは最大 10 個
 #ifdef DEBUG
-#define P_KERN_STKSIZ 300 // プロセス毎のカーネルスタックのサイズ
-#else
+#define P_KERN_STKSIZ 250 // プロセス毎のカーネルスタックのサイズ
+#else                     //  デバッグ時はprintFが約100B余計に使用する
 #define P_KERN_STKSIZ 150 // プロセス毎のカーネルスタックのサイズ
 #endif
 #define P_LOW_PRI 30000   // プロセスの最低優先度
