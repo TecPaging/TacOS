@@ -107,7 +107,7 @@ public int assignFrame(int pNum, PCB pcb) {
 void relFrame(int idx) {                            // 指定したフレームを開放
   int slot = owner[idx];                            // フレームの所有者
   if (slot!=NONE && slot!=SYS) {                    // 仮想メモリ用フレームなら
-    PCB pcb = procTbl[idx];                         //  所有プロセスの
+    PCB pcb = procTbl[slot];                        //  所有プロセスの
     pcb.pageTable[ord(page[idx])] = 0;              //   ページテーブルクリア
     delLst(idx);                                    //  FIFOから削除する
   }
