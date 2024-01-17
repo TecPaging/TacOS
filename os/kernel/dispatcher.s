@@ -91,7 +91,7 @@ _tlbPid ws      1               ; TLBを使用中のプロセスのpid
         cmp     g1,#4           ; ユーザプロセスはpid=5から
         jle     .L2             ; カーネルプロセスなら何もしない
         cmp     g1,_tlbPid      ; 前回のユーザプロセスと同じなら
-        jz      .L2             ; 何もしない
+;        jz      .L2             ; 何もしない
         st      g1,_tlbPid      ; 今回のユーザプロセスを記録
         ld      g2,16,g0        ; Page Table のアドレス
         shrl    g2,#8           ; Page Table のフレーム番号に変換

@@ -51,6 +51,7 @@ __memSiz ws     1           ; 主記憶の最終アドレスを格納する
 .start                      ; IPL からここにジャンプしてくる
         ld      sp,#0xffe0  ; 一致すれば TaC7a-d の新しいファームなので 0xffe0
         st      sp,__memSiz ; カーネルに主記憶のサイズを知らせる
+; BSSはkernel.binファイルに含まれていて00にクリアされている
         call    _main       ; カーネルのメインに飛ぶ
 .m      halt                ; 万一カーネルが終了したらここで終わる
         jmp     .m          ;
