@@ -2,7 +2,7 @@
 # TacOS Source Code
 #    Tokuyama kousen Educational Computer 16 bit Version
 #
-# Copyright (C) 2011 - 2023 by
+# Copyright (C) 2011 - 2024 by
 #                      Dept. of Computer Science and Electronic Engineering,
 #                      Tokuyama College of Technology, JAPAN
 #
@@ -19,11 +19,12 @@
 #
 # pm/Makefile : pm の Makefile
 #
+# 2024.01.18  : pmServer.o 追加
 # 2023.12.31  : frame.o 追加
 # 2015.08.20  : 新規作成
 #
 # $Id$
 #
-OBJS=pm.o frame.o
+OBJS=pmServer.o pm.o frame.o
 
 include ../Makefile.rul
