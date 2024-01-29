@@ -37,6 +37,9 @@
 //-----------------------------------------------------------------------------
 // フレームプール管理のデータ構造
 //-----------------------------------------------------------------------------
+// frame.cmm の関数は pm.cmm(ユーザプロセス), pmServer.cmm(サーバプロセス)の
+// 両方から呼び出されるので public な関数の入り口で割込み禁止による排他を行う．
+
 int krnFrm;                                         // カーネルのフレーム数
 int numFrm;                                         // 利用可能なフレーム数
 
@@ -81,9 +84,6 @@ void insLst(int fIdx, int next) {
 
 // 仮想メモリ用のフレームを空きフレームから割り付け(FIFOに入れる)
 public int assignFrame(int pNum, PCB pcb) {
-#ifdef DEBUG
-  printF("assignFrame(page=%02x,pid=%d,", pNum, pcb.pid);
-#endif
   int fNum = 0;
   int r = setPri(DI|KERN);                          // 排他のため
   for (int i=1; i<=numFrm; i=i+1) {
@@ -96,7 +96,7 @@ public int assignFrame(int pNum, PCB pcb) {
     }
   }
 #ifdef DEBUG
-  printF("frame=%02x)\n", fNum);
+  printF("assignFrame(page=%02x,pid=%d,frame=%02x)\n", pNum, pcb.pid, fNum);
 #endif
   setPri(r);
   return fNum;                                      // フレームを返す
@@ -109,12 +109,28 @@ void relFrame(int idx) {                            // 指定したフレーム�
   if (slot!=NONE && slot!=SYS) {                    // 仮想メモリ用フレームなら
     PCB pcb = procTbl[slot];                        //  所有プロセスの
     pcb.pageTable[ord(page[idx])] = 0;              //   ページテーブルクリア
+    if (pcb.pid==tlbPid) {                          //  TLBを使っている場合は
+      tlbPid = 0;                                   //   dispatch時にTLBをflush
+    }
     delLst(idx);                                    //  FIFOから削除する
   }
   owner[idx] = NONE;                                // フレームは空き
 }
 
-// フレームの解放
+// 解放できるフレームか？
+boolean canRelease(int idx) {
+  int slot = owner[idx];                            // 所有プロセスのスロット
+  if (slot==SYS) return false;                      // フレームはシステム用
+  if (slot==NONE) panic("canRelease");              // NONEでは呼ばれないはず
+  PCB pcb = procTbl[slot];                          // フレームの所有プロセス
+  int entry = pcb.pageTable[ord(page[idx])];        // ページテーブルを読む
+  return (entry & (SBIT|WTBIT))==0;                 // S=0 && W=0 なら解放可
+}
+
+//-----------------------------------------------------------------------------
+// 以下は public な関数(pm.cmm と pmServer.cmmから呼ばれる)
+//-----------------------------------------------------------------------------
+// フレームの解放 (pm.cmm と pmServer.cmm の両方から呼ばれる)
 public void releaseFrame(int fNum) {                // 指定したフレームを開放
 #ifdef DEBUG
   printF("releaseFrame(%02x)\n", fNum);
@@ -124,16 +140,8 @@ public void releaseFrame(int fNum) {                // 指定したフレーム�
   setPri(r);
 }
 
-// 解放できるフレームか？
-boolean canRelease(int idx) {
-  int slot = owner[idx];                            // 所有プロセスのスロット
-  if (slot==SYS) return false;                      // フレームはシステム用
-  PCB pcb = procTbl[slot];                          // フレームの所有プロセス
-  int entry = pcb.pageTable[ord(page[idx])];        // ページテーブルを読む
-  return (entry & (SBIT|WTBIT))==0;                 // S=0 && W=0 なら解放可
-}
-
 // ページテーブル用の連続2フレームの割り付け(FIFOに入れない)
+// (pmServer.cmm から呼ばれる)
 public int assignPagTbl() {                         // 2連続フレームの割り当て
 #ifdef DEBUG
   printF("assignPagTbl(");
@@ -183,6 +191,7 @@ public int assignPagTbl() {                         // 2連続フレームの割
 }
 
 // FIFOから解放できるフレームを捜して取り出し目的のプロセスに割り付ける
+// (pmServer.cmm から呼ばれる)
 public int reuseFrame(int pNum, PCB pcb) {
   int r = setPri(DI|KERN);                          // 排他のため
   int fNum = 0;                                     // 見つけたフレーム
@@ -205,6 +214,8 @@ public int reuseFrame(int pNum, PCB pcb) {
 }
 
 // フレームプールの初期化（mmを使用するので実行順に注意）
+// pmMainの最初で呼ばれる．
+// まだ，ユーザプロセスは存在しないので排他をしない．
 public void frameInit() {
   krnFrm = adrToPage(_memSiz);                      // カーネルのフレーム数
   numFrm = 255 - krnFrm;                            // フレームプールの大きさ

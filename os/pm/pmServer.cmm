@@ -107,7 +107,7 @@ int getWord(int fd) {
 }
 
 // ページ番号をフレーム番号に変換する
-int pToF(int pNum, PCB pcb) {                   
+int pToF(int pNum, PCB pcb) {
   int entry = pcb.pageTable[pNum];                  // ページテーブルエントリ
   if ((entry & VBIT)==0) return 0;                  // 変換できなかった
   return entry&FBITS;                               // フレーム番号を返す
@@ -119,7 +119,7 @@ int allocFrame(int pNum, PCB pcb) {
   if (fNum == 0) {                                  // 空きフレームがなかったら
     fNum = reuseFrame(pNum, pcb);                   // フレームを再利用する
     if (fNum == 0) panic("allocFrame");             // 再利用できるものも無い
-    tlbPid = 0;                                     // dispatch時にTLBをflush
+    //tlbPid = 0;     (reuseFrame()内でやっている)    // dispatch時にTLBをflush
   }
   if (pNum < adrToPage(pcb.textSiz)) {
     pcb.pageTable[pNum] = VBIT|TEXTBITS|fNum;       // V=1,RWX=101,フレーム番号
@@ -404,6 +404,14 @@ int sysExec(int path, int argv, int envp, PCB pcb) {
     return ENOMEM;                                  //   エラー番号を返す
   }
 
+  ////////////////////////////////////
+  //char[] mem = _AtoA(newPcb);
+  //for (int i=0; i<sizeof(PCB); i=i+1) {
+  //  mem[i] = '\0'; 
+  //}
+  ////////////////////////////////////
+
+  ///////////////////
   // PCBにページテーブルを登録する
   // (copyArgsEnvpより前にやる必要がある)
   newPcb.pageTable = _ItoA(fNum*PAGESIZ);           // PCBにページテーブル登録
